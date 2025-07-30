@@ -1,0 +1,25 @@
+name: "np_calendar"
+description: "Natural-Plan Calendar-Scheduling evaluation"
+
+model:
+  max_tokens: 4096
+  max_model_len: 5000
+  temperature: 0.0
+  top_p: 0.9
+  stop_sequences: ["<|im_end|>", "<|endoftext|>", "</s>"]
+  tensor_parallel_size: 1
+  gpu_memory_utilization: 0.9
+
+evaluation:
+  num_questions: null
+  batch_size: 1
+  compute_metrics: true
+
+prompting:
+  system_prompt: ""
+  user_template: ""
+
+output:
+  save_detailed_responses: true
+  save_timing_metrics: true
+  save_energy_metrics: true 

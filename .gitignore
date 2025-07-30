@@ -1,0 +1,61 @@
+# Ignore all result and log files, and other files that should not be pushed to git
+
+# Output/result directories
+results/
+output/
+outputs/
+logs/
+*.log
+
+# Checkpoints, cache, and temp files
+checkpoints/
+cache/
+*.ckpt
+*.tmp
+*.temp
+*.bak
+
+# Python bytecode
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Jupyter Notebook checkpoints
+.ipynb_checkpoints/
+
+# System files
+.DS_Store
+Thumbs.db
+
+# Environment files
+.env
+.venv/
+venv/
+env/
+*.env
+
+# IDE/project files
+.vscode/
+.idea/
+*.sublime-workspace
+*.sublime-project
+
+# Test and debug artifacts
+*.prof
+*.coverage
+*.pytest_cache/
+*.mypy_cache/
+*.hypothesis/
+*.tox/
+
+# CSV and other generated data
+*.csv
+*.tsv
+*.jsonl
+
+# Miscellaneous
+*.swp
+*.swo
+# End of Selection
+bypass.sh
