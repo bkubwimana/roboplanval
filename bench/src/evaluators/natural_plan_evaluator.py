@@ -7,8 +7,8 @@ implemented as a thin subclass of :class:`bench.src.evaluators.base_evaluator.Ba
 so we automatically inherit telemetry, timing, CSV logging, etc.
 """
 
-from typing import Any, Dict, List, Optional
-import os, sys, pathlib
+from typing import Any, Dict, List, Optional, Tuple
+import json, os, sys, pathlib
 from datetime import datetime
 from functools import lru_cache
 
@@ -110,8 +110,16 @@ class NaturalPlanEvaluator(BaseEvaluator):
         from ..telemetry import monitor_evaluation 
         from ..utils.csv_writer import evaluation_csv_writer
 
-        question_results: List[Dict[str, Any]] = []
-        correct_count = 0
+        # Try to load partial results for resume capability
+        question_results, completed_count = self._load_partial_results(output_dir, run_name)
+        correct_count = sum(1 for r in question_results if r.get("is_correct", False))
+        
+        if completed_count > 0:
+            print(f"[RESUME] Resuming from question {completed_count + 1}/{len(examples)}")
+            print(f"[RESUME] Current accuracy: {correct_count}/{completed_count} ({correct_count/completed_count*100:.1f}%)")
+        else:
+            question_results: List[Dict[str, Any]] = []
+            correct_count = 0
 
         with monitor_evaluation(
             output_dir=output_dir,
@@ -120,37 +128,60 @@ class NaturalPlanEvaluator(BaseEvaluator):
             config_name=self.config.name,
             evaluation_type=f"natural_plan_{self.task}",
         ) as monitor, evaluation_csv_writer(output_dir, run_name, self.task) as write_csv_row:
-            for i, ex in enumerate(examples):
-                prompt = self.format_prompt(ex)
-                prediction = self.model.predict(
-                    prompt=prompt,
-                    max_tokens=self.config.model["max_tokens"],
-                    temperature=self.config.model["temperature"],
-                    top_p=self.config.model["top_p"],
-                    stop=self.config.model.get("stop_sequences", ["<|im_end|>", "<|endoftext|>", "</s>"])
-                )
+            try:
+                for i, ex in enumerate(examples):
+                    # Skip already completed questions when resuming
+                    if i < completed_count:
+                        continue
+                        
+                    print(f"[{i+1}/{len(examples)}] Processing question {ex.example_id}")
+                    prompt = self.format_prompt(ex)
+                    prediction = self.model.predict(
+                        prompt=prompt,
+                        max_tokens=self.config.model["max_tokens"],
+                        temperature=self.config.model["temperature"],
+                        top_p=self.config.model["top_p"],
+                        stop=self.config.model.get("stop_sequences", ["<|im_end|>", "<|endoftext|>", "</s>"])
+                    )
 
-                generated = prediction.generated_text.strip()
-                is_correct = False
+                    generated = prediction.generated_text.strip()
+                    is_correct = False
 
-                if compute_metrics:
-                    is_correct = self._check_correctness(ex, generated)
-                    if is_correct:
-                        correct_count += 1
+                    if compute_metrics:
+                        try:
+                            is_correct = self._check_correctness(ex, generated)
+                            if is_correct:
+                                correct_count += 1
+                        except Exception as e:
+                            print(f"[ERROR] Validation failed for question {ex.example_id}: {e}")
+                            is_correct = False  # Mark as incorrect and continue
 
-                question_result = {
-                    "question_id": ex.example_id,
-                    "prompt_tokens": prediction.input_tokens,
-                    "output_tokens": prediction.output_tokens,
-                    "generated_text": generated,
-                    "is_correct": is_correct,
-                    "time_ms": prediction.total_time_ms,
-                    "tokens_per_second": prediction.tokens_per_second,
-                }
-                question_results.append(question_result)
-                write_csv_row(i, ex, prediction, None, None, is_correct)
-                monitor.record_question_result(i, prediction)
+                    question_result = {
+                        "question_id": ex.example_id,
+                        "prompt_tokens": prediction.input_tokens,
+                        "output_tokens": prediction.output_tokens,
+                        "generated_text": generated,
+                        "is_correct": is_correct,
+                        "time_ms": prediction.total_time_ms,
+                        "tokens_per_second": prediction.tokens_per_second,
+                    }
+                    question_results.append(question_result)
+                    write_csv_row(i, ex, prediction, None, None, is_correct)
+                    monitor.record_question_result(i, prediction)
+                    
+                    # Save partial results every 10 questions
+                    if (i + 1) % 10 == 0:
+                        self._save_partial_results(question_results, output_dir, run_name)
+                        
+            except Exception as e:
+                print(f"[ERROR] Evaluation failed at question {len(question_results) + 1}: {e}")
+                print(f"[SAVE] Saving partial results before exit...")
+                self._save_partial_results(question_results, output_dir, run_name)
+                raise  # Re-raise to maintain error behavior
 
+        # Final save of all results
+        self._save_partial_results(question_results, output_dir, run_name)
+        
         accuracy = correct_count / len(examples) if compute_metrics else -1
         avg_time = sum(r["time_ms"] for r in question_results) / len(question_results)
         avg_tps = sum(r["tokens_per_second"] for r in question_results) / len(question_results)
@@ -175,6 +206,34 @@ class NaturalPlanEvaluator(BaseEvaluator):
     # ------------------------------------------------------------------
     # Private helpers
     # ------------------------------------------------------------------
+    
+    def _save_partial_results(self, question_results: List[Dict[str, Any]], output_dir: str, run_name: str) -> None:
+        """Save partial results to JSON for crash recovery."""
+        os.makedirs(output_dir, exist_ok=True)
+        partial_file = os.path.join(output_dir, f"partial_{run_name}.json")
+        partial_data = {
+            "question_results": question_results,
+            "completed_count": len(question_results),
+            "timestamp": datetime.now().isoformat()
+        }
+        with open(partial_file, 'w') as f:
+            json.dump(partial_data, f, indent=2)
+        print(f"[SAVE] Partial results saved: {len(question_results)} questions → {partial_file}")
+    
+    def _load_partial_results(self, output_dir: str, run_name: str) -> Tuple[List[Dict[str, Any]], int]:
+        """Load partial results if they exist."""
+        partial_file = os.path.join(output_dir, f"partial_{run_name}.json")
+        if os.path.exists(partial_file):
+            try:
+                with open(partial_file, 'r') as f:
+                    data = json.load(f)
+                question_results = data.get("question_results", [])
+                completed_count = data.get("completed_count", 0)
+                print(f"[RESUME] Found partial results: {completed_count} questions completed")
+                return question_results, completed_count
+            except Exception as e:
+                print(f"[WARN] Could not load partial results: {e}")
+        return [], 0
     def _sanitize_meeting_steps(self, steps: list[str]) -> list[str]:
         """Return only the sentences that match the expected Natural-Plan few-shot patterns.
 
@@ -218,11 +277,15 @@ class NaturalPlanEvaluator(BaseEvaluator):
             score_pred = validator_from_text(
                 plan_txt, constraints, start_location, initial_time, ex.meta["dist_matrix"]
             )
-        except ValueError:
-            # Any parsing error means the answer is incorrect.
+        except (ValueError, KeyError) as e:
+            print(f"Validation error for generated plan: {e}")
             return False
 
-        score_gold = validator_from_text(
-            ex.meta["golden_plan"], constraints, start_location, initial_time, ex.meta["dist_matrix"]
-        )
+        try:
+            score_gold = validator_from_text(
+                ex.meta["golden_plan"], constraints, start_location, initial_time, ex.meta["dist_matrix"]
+            )
+        except (ValueError, KeyError) as e:
+            print(f"Warning: Golden plan validation failed: {e}")
+            return False
         return score_pred == score_gold 

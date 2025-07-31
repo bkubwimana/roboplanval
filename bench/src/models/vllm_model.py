@@ -1,5 +1,5 @@
 """
-VLLM Model Wrapper - Professional model management for performance evaluation.
+VLLM Model Wrapper - model management for performance evaluation.
 
 This module provides a clean interface for VLLM model operations with built-in
 performance monitoring and standardized prediction results.
@@ -29,61 +29,40 @@ class PredictionResult:
     predicted_choice: str
     generated_text: str
     
-    # Token counts
-    input_tokens: int  # prompt_tokens
-    output_tokens: int  # completion_tokens
-    
-    # Timing metrics (matching AIME evaluation format)
-    ttft: float  # Time to first token (ms)
-    decode_time: float  # Time for decoding after first token (ms)
-    total_time_ms: float  # Total inference time (ms)
-    tokens_per_second: float  # Calculated tokens/sec
-    
-    # Support for multiple sequences from n parameter (for efficient scaling)
+    input_tokens: int
+    output_tokens: int
+
+    ttft: float
+    decode_time: float
+    total_time_ms: float
+    tokens_per_second: float
+
     generated_texts: Optional[List[str]] = None
-    
-    # Raw data for detailed analysis
-    raw_completion: Any = None  # Store VLLM RequestOutput
-    # Expose raw metrics and token ids for specialized instrumentation
+
+    raw_completion: Any = None
     prompt_token_ids: List[int] = field(default_factory=list)
     token_ids: List[int] = field(default_factory=list)
     metrics: Any = None
-    
-    # Legacy aliases for compatibility
+    # aliases for compatibility
     @property
     def prompt_tokens(self) -> int:
-        """Alias for input_tokens to match AIME format."""
         return self.input_tokens
     
     @property
     def completion_tokens(self) -> int:
-        """Alias for output_tokens to match AIME format."""
         return self.output_tokens
     
     @property
     def tokens_generated(self) -> int:
-        """Alias for output_tokens to match AIME format."""
         return self.output_tokens
     
     @property
     def total_time(self) -> float:
-        """Total time in seconds (for AIME compatibility)."""
         return self.total_time_ms / 1000.0
 
 
 class VLLMModel:
-    """
-    Professional VLLM model wrapper with performance monitoring.
-    
-    Features:
-    - Efficient VLLM integration
-    - Automatic token counting
-    - Performance metrics collection
-    - Standardized result format
-    """
-    
     def __init__(self, config: VLLMConfig):
-        """Initialize VLLM model with configuration."""
         self.config = config
         self.model: Optional[LLM] = None
         self.tokenizer: Optional[AutoTokenizer] = None
@@ -98,7 +77,7 @@ class VLLMModel:
         )
         
         print(f"Loading VLLM model: {self.config.model_path}")
-        # Configure model for server-class GPUs (same as test_simple_metrics.py)
+        # Configure model for server GPUs
         model_kwargs = {
             "model": self.config.model_path,
             "tensor_parallel_size": self.config.tensor_parallel_size,
@@ -145,42 +124,35 @@ class VLLMModel:
             **kwargs
         )
         
-        # Generate with vLLM (metrics collection enabled in model loading)
+        # Generate with vLLM
         completions = self.model.generate([prompt], sampling_params)
         
-        # Validate that we got completions
         if not completions:
             raise RuntimeError("No completions returned from vLLM model")
         
         completion = completions[0]
         
-        # Validate that we got outputs
         if not completion.outputs:
             raise RuntimeError("No outputs in completion from vLLM model")
         
-        # Extract ALL generated texts (for n > 1 support)
+        # Extract ALL generated texts
         generated_texts = [output.text for output in completion.outputs]
-        generated_text = generated_texts[0]  # Primary text (backward compatibility)
+        generated_text = generated_texts[0]
         
-        # Calculate total output tokens across all sequences
         total_output_tokens = sum(len(output.token_ids) for output in completion.outputs)
         
-        # Token counts
         input_tokens = len(completion.prompt_token_ids) if hasattr(completion, 'prompt_token_ids') else 0
         output_tokens = total_output_tokens
         
-        # Extract real metrics from vLLM - handle n > 1 case where some metrics may be None
         metrics = getattr(completion, "metrics", None)
         if metrics is None:
             raise RuntimeError("No metrics found on completion object")
         
-        # Calculate real timing metrics (in seconds) - handle None values for n > 1
         arrival_time = getattr(metrics, 'arrival_time', None) or 0
         first_token_time = getattr(metrics, 'first_token_time', None)
         last_token_time = getattr(metrics, 'last_token_time', None) 
         finished_time = getattr(metrics, 'finished_time', None)
         
-        # Calculate timing with None checks (common when n > 1)
         if first_token_time is not None and arrival_time is not None:
             ttft = first_token_time - arrival_time
         else:
@@ -199,7 +171,6 @@ class VLLMModel:
         # Calculate tokens per second
         tokens_per_second = output_tokens / total_time if total_time > 0 else 0
         
-        # Convert to milliseconds for consistency with existing API
         ttft_ms = ttft * 1000
         decode_time_ms = decode_time * 1000
         total_time_ms = total_time * 1000
@@ -207,7 +178,7 @@ class VLLMModel:
         return PredictionResult(
             predicted_choice="", 
             generated_text=generated_text,
-            generated_texts=generated_texts,  # Support multiple sequences from n parameter
+            generated_texts=generated_texts,
             input_tokens=input_tokens,
             output_tokens=output_tokens,
             ttft=ttft_ms,
@@ -244,11 +215,9 @@ class VLLMModel:
         if not self.model or not self.tokenizer:
             raise RuntimeError("Model not loaded. Call _load_model() first.")
             
-        # For single prompt, use individual predict for consistency
         if len(prompts) == 1:
             return [self.predict(prompts[0], max_tokens, temperature, top_p, **kwargs)]
         
-        # Configure sampling parameters
         sampling_params = SamplingParams(
             temperature=temperature,
             max_tokens=max_tokens,
@@ -256,40 +225,32 @@ class VLLMModel:
             **kwargs
         )
         
-        # Generate batch with real metrics collection
         completions = self.model.generate(prompts, sampling_params)
         
-        # Process results with standard vLLM metrics (like test_simple_metrics.py)
         results = []
         for completion in completions:
-            # Extract metrics using getattr approach
             metrics = getattr(completion, "metrics", None)
             if metrics is None:
                 raise RuntimeError("No metrics found on completion object")
             
-            # Extract generated text and tokens
             generated_text = completion.outputs[0].text
             output_token_ids = completion.outputs[0].token_ids
             
-            # Calculate timing metrics using standard vLLM metrics attributes
             ttft = metrics.first_token_time - metrics.arrival_time
             decode_time = metrics.last_token_time - metrics.first_token_time
             total_time = metrics.finished_time - metrics.arrival_time
             
-            # Token counts using available attributes
             input_tokens = len(completion.prompt_token_ids) if hasattr(completion, 'prompt_token_ids') else 0
             output_tokens = len(output_token_ids)
             
-            # Calculate tokens per second
             tokens_per_second = output_tokens / total_time if total_time > 0 else 0
             
-            # Convert to milliseconds
             ttft_ms = ttft * 1000
             decode_time_ms = decode_time * 1000
             total_time_ms = total_time * 1000
             
             results.append(PredictionResult(
-                predicted_choice="",  # Will be extracted by evaluator
+                predicted_choice="",
                 generated_text=generated_text,
                 input_tokens=input_tokens,
                 output_tokens=output_tokens,

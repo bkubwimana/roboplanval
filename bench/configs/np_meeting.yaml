@@ -13,7 +13,7 @@ model:
 evaluation:
   num_questions: null
   batch_size: 1
-  compute_metrics: true
+  compute_metrics: false  
 
 prompting:
   system_prompt: ""
