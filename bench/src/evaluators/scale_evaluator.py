@@ -114,25 +114,19 @@ class ScaleEvaluator(BaseEvaluator):
         Returns:
             Tuple of (final_choice, all_samples, sample_predictions, total_time_ms, total_tokens, vote_counts, input_tokens)
         """
-        # CORRECTED: Use vLLM's native 'n' parameter for efficient parallel decoding
         token_budget = self.config.scaling.get('max_new_tokens', 128)
         
-        # Single efficient call with vLLM's 'n' parameter
-        # This is MUCH more efficient than multiple sequential calls:
-        # - One prefill instead of num_samples prefills
-        # - Parallel decoding for all samples
-        # - Significant speedup for test-time scaling
+        # Single call with vLLM's 'n' parameter
         sampling_kwargs = {
             'max_tokens': token_budget,
-            'min_tokens': token_budget,  # ENFORCE: min_tokens = max_tokens for consistent length
+            'min_tokens': token_budget,  
             'temperature': self.config.model['temperature'],
             'top_p': self.config.model['top_p'],
             'top_k': self.config.model.get('top_k', 50),
             'repetition_penalty': self.config.model.get('repetition_penalty', 1.1),
-            'n': num_samples  # KEY: Generate all samples in single call with parallel decoding
+            'n': num_samples 
         }
         
-        # Add seed if specified in config
         if 'seed' in self.config.model and self.config.model['seed'] is not None:
             sampling_kwargs['seed'] = self.config.model['seed']
         
@@ -144,22 +138,17 @@ class ScaleEvaluator(BaseEvaluator):
         
         # Log efficiency improvement
         avg_time_per_sample = prediction.total_time_ms / num_samples
-        print(f"🚀 Efficient scaling: {num_samples} samples in {prediction.total_time_ms:.1f}ms (avg {avg_time_per_sample:.1f}ms/sample)")
-        
-        # Extract all samples from the single efficient call
+        print(f"Efficient scaling: {num_samples} samples in {prediction.total_time_ms:.1f}ms (avg {avg_time_per_sample:.1f}ms/sample)")
         if prediction.generated_texts is None or len(prediction.generated_texts) != num_samples:
             raise RuntimeError(f"Expected {num_samples} generated texts, got {len(prediction.generated_texts) if prediction.generated_texts else 0}")
         
         all_samples = prediction.generated_texts
         sample_predictions = []
         
-        # Process each generated sequence
         for i, generated_text in enumerate(all_samples):
-            # Extract choice from this sample using the utility
             predicted_choice = self.answer_extractor.extract_choice(generated_text)
             sample_predictions.append(predicted_choice)
         
-        # Get timing and token metrics from the single efficient call
         total_time_ms = prediction.total_time_ms
         total_tokens = prediction.output_tokens
         input_tokens = prediction.input_tokens
@@ -242,9 +231,8 @@ class ScaleEvaluator(BaseEvaluator):
                     avg_time_per_sample = total_time_ms / num_samples
                     tokens_per_second = total_tokens / (total_time_ms / 1000) if total_time_ms > 0 else 0
                     
-                    # Estimate timing components (since vLLM provides aggregate timing for n > 1)
-                    estimated_ttft = total_time_ms * 0.1  # ~10% for first token
-                    estimated_decode_time = total_time_ms * 0.9  # ~90% for decoding
+                    estimated_ttft = total_time_ms * 0.1 
+                    estimated_decode_time = total_time_ms * 0.9 
                     
                     # Create a synthetic prediction result for telemetry
                     prediction = PredictionResult(
@@ -258,13 +246,11 @@ class ScaleEvaluator(BaseEvaluator):
                         tokens_per_second=tokens_per_second
                     )
                     
-                    # Check correctness
                     correct_answer = question_data.correct_answer
                     is_correct = final_choice == correct_answer
                     if is_correct:
                         correct_count += 1
                         
-                    # Record detailed results
                     question_result = {
                         'question_id': i,
                         'question': question_data.question,
@@ -287,11 +273,7 @@ class ScaleEvaluator(BaseEvaluator):
                         'voting_confidence': self.voting_confidence_scores[-1]
                     }
                     question_results.append(question_result)
-                    
-                    # Write to CSV immediately using reusable module
                     write_csv_row(i, question_data, prediction, correct_answer, final_choice, is_correct)
-                    
-                    # Record in telemetry
                     monitor.record_question_result(i, prediction)
                     
         # Calculate final metrics
@@ -300,7 +282,6 @@ class ScaleEvaluator(BaseEvaluator):
         avg_tokens_per_sec = sum(r['tokens_per_second'] for r in question_results) / len(question_results)
         avg_voting_confidence = sum(self.voting_confidence_scores) / len(self.voting_confidence_scores) if self.voting_confidence_scores else 0.0
         
-        # Create result object
         result = EvaluationResult(
             config_name=self.config.name,
             model_name=model_name,
@@ -313,7 +294,6 @@ class ScaleEvaluator(BaseEvaluator):
             question_results=question_results
         )
         
-        # Store scaling-specific metrics in result object (not in question_results list)
         result.scaling_metrics = {
             'total_samples_generated': self.total_samples_generated,
             'samples_per_question': num_samples,
@@ -321,7 +301,6 @@ class ScaleEvaluator(BaseEvaluator):
             'scaling_efficiency': self._calculate_scaling_efficiency(result)
         }
         
-        # Save detailed results if configured
         if self.config.output.get('save_detailed_responses', True):
             self._save_detailed_results(result, output_dir, run_name)
             
@@ -337,10 +316,7 @@ class ScaleEvaluator(BaseEvaluator):
         Returns:
             Scaling efficiency score (0.0 to 1.0)
         """
-        # Simple efficiency metric: accuracy weighted by confidence
         avg_confidence = sum(self.voting_confidence_scores) / len(self.voting_confidence_scores) if self.voting_confidence_scores else 0.0
-        
-        # Efficiency combines accuracy and confidence
         efficiency = (result.accuracy * 0.7) + (avg_confidence * 0.3)
         
         return min(efficiency, 1.0)
@@ -349,7 +325,6 @@ class ScaleEvaluator(BaseEvaluator):
         """Print scaling evaluation summary with scaling-specific metrics."""
         super().print_summary(result)
         
-        # Get scaling metrics from result object
         if hasattr(result, 'scaling_metrics') and result.scaling_metrics:
             scaling_metrics = result.scaling_metrics
             print(f"\nTEST-TIME SCALING METRICS:")

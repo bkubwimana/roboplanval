@@ -2,7 +2,7 @@ name: "np_trip"
 description: "Natural-Plan Trip-Planning evaluation (1600 examples)"
 
 model:
-  max_tokens: 4096
+  max_tokens: 2048
   max_model_len: 5000
   temperature: 0.0  
   top_p: 0.9
@@ -16,8 +16,8 @@ evaluation:
   compute_metrics: true 
 
 prompting:
-  system_prompt: ""
-  user_template: "" 
+  system_prompt: "You are an expert trip planner. Provide the best plan in no more than 512 tokens."
+  user_template: "{prompt}\n\nPlease answer in at most 512 tokens."
 
 output:
   save_detailed_responses: true

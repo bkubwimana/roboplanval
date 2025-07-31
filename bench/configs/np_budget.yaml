@@ -1,0 +1,28 @@
+name: "np_budget"
+description: "Budget-limited Natural-Plan evaluation for edge deployment"
+
+model:
+  max_tokens: 128           
+  max_model_len: 13312      
+  temperature: 0.0          
+  top_p: 0.9
+  stop_sequences: ["<|im_end|>", "<|endoftext|>", "</s>"]
+  tensor_parallel_size: 1
+  gpu_memory_utilization: 0.9
+
+evaluation:
+  num_questions: null
+  start_question: null
+  end_question: null
+  batch_size: 1
+  compute_metrics: true
+
+prompting:
+  system_prompt: "As an expert planner, be concise and direct. You must limit your answer to exactly {max_tokens} tokens or fewer."
+  user_template: "TOKEN BUDGET: {max_tokens} tokens maximum\n\n{prompt}\n\nRemember: Stay within {max_tokens} tokens total."
+
+output:
+  save_detailed_responses: true
+  save_timing_metrics: true
+  save_energy_metrics: true
+  save_budget_analysis: true

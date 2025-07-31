@@ -15,36 +15,40 @@ TARGET=${2:-}
 list_sessions() {
     echo "=== Active Natural-Plan Sessions ==="
     screen -ls | grep "np_" | while read line; do
-        # Extract session name after the first dot (handle dots in session names)
-        session=$(echo "$line" | awk '{print $1}' | cut -d'.' -f2-)
+        session_full=$(echo "$line" | awk '{print $1}')
+        screen_pid=${session_full%%.*}
+        session=${session_full#*.}
         status=$(echo "$line" | grep -o "(Attached\|Detached)")
         
-        # Extract task and model from session name
-        if [[ $session =~ ^np_([^_]+)_(.+)$ ]]; then
-            # Format: np_<task>_<model>
+        # Handle optional prefixes like np_budget_ or np_scale_
+        stripped=${session#np_}
+        stripped=${stripped#budget_}
+        stripped=${stripped#scale_}
+        if [[ $stripped =~ ^([^_]+)_(.+)$ ]]; then
             task="${BASH_REMATCH[1]}"
             model="${BASH_REMATCH[2]}"
-        elif [[ $session =~ ^np_([^_]+)$ ]]; then
-            # Format: np_<task> (default to 14b)
-            task="${BASH_REMATCH[1]}"
-            model="14b"
         else
-            continue  # Skip unrecognized session names
+            task="$stripped"
+            model="14b"  
         fi
         
-        # Map to GPU (updated to match bypass.sh)
+        # Static GPU mapping (hardcoded from bypass.sh and np_budget.sh) ----------------
         case "${model},${task}" in
+            # 14B models: GPUs 0,1,2
             "14b,trip") gpu=0;;
             "14b,meeting") gpu=1;;
             "14b,calendar") gpu=2;;
+            # 8B models: GPUs 3,4,5
             "8b,trip") gpu=3;;
             "8b,meeting") gpu=4;;
             "8b,calendar") gpu=5;;
+            # 1.5B models: GPUs 6,7,7
             "1.5b,trip") gpu=6;;
             "1.5b,meeting") gpu=7;;
             "1.5b,calendar") gpu=7;;
             *) gpu="?";;
         esac
+
         
         printf "  %-20s | %-8s | %-7s | GPU %-2s | %s\n" "$session" "$task" "$model" "$gpu" "$status"
     done
@@ -61,20 +65,22 @@ kill_sessions() {
     echo "=== Killing sessions matching: $target ==="
     
     screen -ls | grep "np_" | while read line; do
-        # Extract session name after the first dot (handle dots in session names)
-        session=$(echo "$line" | awk '{print $1}' | cut -d'.' -f2-)
+        session_full=$(echo "$line" | awk '{print $1}')
+        screen_pid=${session_full%%.*}
+        session=${session_full#*.}
         
         should_kill=false
         
-        # Parse session to determine task and model
-        if [[ $session =~ ^np_([^_]+)_(.+)$ ]]; then
+        # Strip prefixes
+        stripped=${session#np_}
+        stripped=${stripped#budget_}
+        stripped=${stripped#scale_}
+        if [[ $stripped =~ ^([^_]+)_(.+)$ ]]; then
             session_task="${BASH_REMATCH[1]}"
             session_model="${BASH_REMATCH[2]}"
-        elif [[ $session =~ ^np_([^_]+)$ ]]; then
-            session_task="${BASH_REMATCH[1]}"
-            session_model="14b"  # default
         else
-            continue  # Skip unrecognized sessions
+            session_task="$stripped"
+            session_model="14b"
         fi
         
         case "$target" in

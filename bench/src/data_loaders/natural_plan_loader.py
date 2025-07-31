@@ -23,7 +23,6 @@ class NPExample:
     golden: Any  
     meta: Dict[str, Any]  
 
-    # Convenience attributes so that evaluator code that expects ``question`` works.
     # For Natural-Plan we treat the entire prompt as the "question".
     @property
     def question(self) -> str:  # type: ignore
@@ -63,13 +62,19 @@ class NaturalPlanLoader:
     # ---------------------------------------------------------------------
     # Public API
     # ---------------------------------------------------------------------
-    def load(self, task: str) -> List[NPExample]:
-        """Load all examples for the given task.
+    def load(self, task: str, start_index: int | None = None, end_index: int | None = None, max_count: int | None = None) -> List[NPExample]:
+        """Load examples for the given task.
 
         Parameters
         ----------
         task: str
             One of ``trip``, ``meeting``, or ``calendar``.
+        start_index: int | None
+            Start loading from this example index (0-based, inclusive).
+        end_index: int | None  
+            Stop loading at this example index (exclusive).
+        max_count: int | None
+            Maximum number of examples to load (applied after start_index).
         """
         if task not in self.FILES:
             raise ValueError(f"Unknown Natural-Plan task: {task}. Expected one of {list(self.FILES)}")
@@ -80,8 +85,30 @@ class NaturalPlanLoader:
         with path.open() as f:
             raw: Dict[str, Dict[str, Any]] = json.load(f)
 
+        # Use keys as-is - they should already be in correct order in the JSON
+        all_keys = list(raw.keys())
+        
+        # Apply start_index filter
+        if start_index is not None:
+            if start_index < 0 or start_index >= len(all_keys):
+                raise ValueError(f"start_index ({start_index}) out of range [0, {len(all_keys)})")
+            all_keys = all_keys[start_index:]
+        
+        # Apply end_index filter
+        if end_index is not None:
+            if end_index <= 0:
+                raise ValueError(f"end_index ({end_index}) must be positive")
+            end_idx = end_index - (start_index or 0) 
+            if end_idx > 0 and end_idx < len(all_keys):
+                all_keys = all_keys[:end_idx]
+        
+        # Apply max_count filter
+        if max_count is not None and max_count < len(all_keys):
+            all_keys = all_keys[:max_count]
+
         examples: List[NPExample] = []
-        for example_id, record in raw.items():
+        for example_id in all_keys:
+            record = raw[example_id]
             examples.append(
                 NPExample(
                     task=task,
@@ -92,5 +119,6 @@ class NaturalPlanLoader:
                 )
             )
 
-        logger.info("Loaded %d examples for Natural-Plan %s", len(examples), task)
+        total_available = len(raw)
+        logger.info("Loaded %d of %d examples for Natural-Plan %s", len(examples), total_available, task)
         return examples 

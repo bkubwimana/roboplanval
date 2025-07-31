@@ -25,6 +25,8 @@ from datetime import datetime
 sys.path.append(os.path.join(os.path.dirname(__file__), 'src'))
 
 from src.evaluators.natural_plan_evaluator import NaturalPlanEvaluator
+from src.evaluators.natural_plan_scaling_evaluator import NaturalPlanScalingEvaluator
+import yaml
 
 TASKS = ["trip", "meeting", "calendar"]
 
@@ -47,7 +49,19 @@ def run_task(task: str, model_path: str, config_path: str, output_root: str, gpu
     if gpu_id is not None:
         os.environ["CUDA_VISIBLE_DEVICES"] = gpu_id
         print(f"[planner_eval] Using GPU {gpu_id} for task {task}")
-    evaluator = NaturalPlanEvaluator(config_path, task)
+    
+    # Determine which evaluator to use based on config
+    with open(config_path, 'r') as f:
+        config = yaml.safe_load(f)
+    
+    # Use scaling evaluator if scaling config exists with num_samples > 1
+    if 'scaling' in config and config['scaling'].get('num_samples', 1) > 1:
+        print(f"[planner_eval] Using NaturalPlanScalingEvaluator for {config['scaling']['num_samples']} samples")
+        evaluator = NaturalPlanScalingEvaluator(config_path, task)
+    else:
+        print(f"[planner_eval] Using NaturalPlanEvaluator (single sample)")
+        evaluator = NaturalPlanEvaluator(config_path, task)
+    
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     task_out_dir = os.path.join(output_root, f"{task}_{timestamp}")
     os.makedirs(task_out_dir, exist_ok=True)

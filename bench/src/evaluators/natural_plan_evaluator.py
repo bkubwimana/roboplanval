@@ -61,13 +61,30 @@ class NaturalPlanEvaluator(BaseEvaluator):
         super().__init__(config_path)
         self.loader = NaturalPlanLoader()
         self.task = task
+        
+
 
     # ------------------------------------------------------------------
     # Overridden helper methods
     # ------------------------------------------------------------------
     def format_prompt(self, example: NPExample) -> str:  # type: ignore[override]
         """Return the few-shot prompt contained in each example."""
-        return example.prompt
+        # Check if config has custom prompting templates (for budget mode)
+        if hasattr(self.config, 'prompting') and 'user_template' in self.config.prompting:
+            # Use budget-aware templating
+            system_prompt = self.config.prompting.get('system_prompt', '')
+            user_template = self.config.prompting.get('user_template', '{prompt}')
+            
+            max_tokens = self.config.model.get('max_tokens', 128)
+            system_prompt = system_prompt.format(max_tokens=max_tokens)
+            user_template = user_template.format(max_tokens=max_tokens, prompt=example.prompt)
+            
+            if system_prompt:
+                return f"{system_prompt}\n\n{user_template}"
+            else:
+                return user_template
+        else:
+            return example.prompt
 
     # ------------------------------------------------------------------
     # Public API
@@ -96,13 +113,21 @@ class NaturalPlanEvaluator(BaseEvaluator):
         if not self.model:
             self.setup_model(model_path)
 
-        examples: List[NPExample] = self.loader.load(self.task)
+        # Get filtering parameters from config
+        start_question = self.config.evaluation.get("start_question")
+        end_question = self.config.evaluation.get("end_question")
+        num_questions = self.config.evaluation.get("num_questions")
+        
+        # Load only the examples we need (much more memory efficient)
+        examples: List[NPExample] = self.loader.load(
+            self.task, 
+            start_index=start_question,
+            end_index=end_question, 
+            max_count=num_questions
+        )
+        
         if not examples:
             raise RuntimeError(f"No examples loaded for Natural-Plan task '{self.task}'")
-
-        num_questions = self.config.evaluation.get("num_questions")
-        if num_questions and num_questions < len(examples):
-            examples = examples[:num_questions]
 
         run_name = f"{self.config.name}_{self.task}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
         model_name = os.path.basename(model_path.rstrip("/"))
@@ -113,6 +138,9 @@ class NaturalPlanEvaluator(BaseEvaluator):
         # Try to load partial results for resume capability
         question_results, completed_count = self._load_partial_results(output_dir, run_name)
         correct_count = sum(1 for r in question_results if r.get("is_correct", False))
+        
+        # Calculate the question index offset for proper logging  
+        question_offset = start_question or 0
         
         if completed_count > 0:
             print(f"[RESUME] Resuming from question {completed_count + 1}/{len(examples)}")
@@ -133,8 +161,10 @@ class NaturalPlanEvaluator(BaseEvaluator):
                     # Skip already completed questions when resuming
                     if i < completed_count:
                         continue
+                    
+                    actual_question_idx = question_offset + i
                         
-                    print(f"[{i+1}/{len(examples)}] Processing question {ex.example_id}")
+                    print(f"[{i+1}/{len(examples)}] Processing question {ex.example_id} (index {actual_question_idx})")
                     prompt = self.format_prompt(ex)
                     prediction = self.model.predict(
                         prompt=prompt,
@@ -154,7 +184,7 @@ class NaturalPlanEvaluator(BaseEvaluator):
                                 correct_count += 1
                         except Exception as e:
                             print(f"[ERROR] Validation failed for question {ex.example_id}: {e}")
-                            is_correct = False  # Mark as incorrect and continue
+                            is_correct = False 
 
                     question_result = {
                         "question_id": ex.example_id,
@@ -166,8 +196,8 @@ class NaturalPlanEvaluator(BaseEvaluator):
                         "tokens_per_second": prediction.tokens_per_second,
                     }
                     question_results.append(question_result)
-                    write_csv_row(i, ex, prediction, None, None, is_correct)
-                    monitor.record_question_result(i, prediction)
+                    write_csv_row(actual_question_idx, ex, prediction, None, None, is_correct)
+                    monitor.record_question_result(actual_question_idx, prediction)
                     
                     # Save partial results every 10 questions
                     if (i + 1) % 10 == 0:
@@ -177,9 +207,8 @@ class NaturalPlanEvaluator(BaseEvaluator):
                 print(f"[ERROR] Evaluation failed at question {len(question_results) + 1}: {e}")
                 print(f"[SAVE] Saving partial results before exit...")
                 self._save_partial_results(question_results, output_dir, run_name)
-                raise  # Re-raise to maintain error behavior
+                raise  
 
-        # Final save of all results
         self._save_partial_results(question_results, output_dir, run_name)
         
         accuracy = correct_count / len(examples) if compute_metrics else -1
