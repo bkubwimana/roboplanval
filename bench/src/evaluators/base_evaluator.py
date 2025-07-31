@@ -120,7 +120,8 @@ class BaseEvaluator:
             model_path=model_path,
             tensor_parallel_size=self.config.model.get('tensor_parallel_size', 1),
             gpu_memory_utilization=self.config.model.get('gpu_memory_utilization', 0.90),
-            max_model_len=self.config.model.get('max_model_len', 4096)
+            max_model_len=self.config.model.get('max_model_len', 4096),
+            kv_cache_dtype=self.config.model.get('kv_cache_dtype')
         )
         
         print(f"Setting up model: {model_path}")

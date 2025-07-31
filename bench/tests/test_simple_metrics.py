@@ -1,8 +1,8 @@
 """
-Minimal tests to confirm VLLM exposes true timing metrics (no estimation, no two-phase)
+Minimal tests to confirm VLLM exposes metrics
 """
 import os
-os.environ["CUDA_VISIBLE_DEVICES"] = "3"
+os.environ["CUDA_VISIBLE_DEVICES"] = "1"
 from vllm import LLM, SamplingParams
 
 def test_single_completion_metrics():

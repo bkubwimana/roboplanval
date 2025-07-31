@@ -1,15 +1,72 @@
 """
-VLLM Model Wrapper - Professional model management for performance evaluation.
+VLLM Model Wrapper - model management for performance evaluation.
 
-This module provides a clean interface for VLLM model operations with built-in
+This module provides interface for VLLM model operations with built-in
 performance monitoring and standardized prediction results.
 """
 
+import os
 import time
 from dataclasses import dataclass, field
 from typing import List, Dict, Optional, Any
+import vllm
 from vllm import LLM, SamplingParams
 from transformers import AutoTokenizer
+
+
+def _setup_vllm_metrics(enable_metrics: bool = True, vllm_version: Optional[str] = None) -> str:
+    """
+    Setup vLLM metrics collection based on version.
+    
+    Args:
+        enable_metrics: Whether to enable metrics collection
+        vllm_version: Specific vLLM version, or None to auto-detect
+        
+    Returns:
+        Detected vLLM version string
+    """
+    # Auto-detect version if not provided
+    detected_version = vllm_version or getattr(vllm, '__version__', '0.8.6')
+    
+    if not enable_metrics:
+        return detected_version
+        
+    # For vLLM >= 0.9.1, use environment variables
+    if detected_version >= "0.9.1":
+        os.environ.setdefault("VLLM_ENABLE_METRICS", "1")
+        os.environ.setdefault("VLLM_PROFILE", "1")
+        os.environ.setdefault("VLLM_DETAILED_METRICS", "1")
+        os.environ.setdefault("VLLM_REQUEST_METRICS", "1")
+        print(f"✅ Enabled vLLM {detected_version} metrics via environment variables")
+    else:
+        print(f"⚠️  vLLM {detected_version} may not support RequestMetrics")
+        
+    return detected_version
+
+
+def _get_metrics_from_completion(completion, llm_engine=None) -> Optional[Any]:
+    """
+    Extract metrics from completion object, handling both V0 and V1 engines.
+    
+    Args:
+        completion: vLLM RequestOutput object
+        llm_engine: vLLM engine instance (for V1 engine lookup)
+        
+    Returns:
+        RequestMetrics object or None
+    """
+    # V0 engine: metrics attached directly to completion
+    metrics = getattr(completion, "metrics", None)
+    if metrics is not None:
+        return metrics
+    
+    # V1 engine: metrics stored in engine's request_metrics dict
+    if llm_engine and hasattr(completion, "request_id"):
+        request_metrics = getattr(llm_engine, "request_metrics", None)
+        if isinstance(request_metrics, dict):
+            return request_metrics.get(completion.request_id)
+    
+    return None
 
 
 @dataclass
@@ -21,6 +78,10 @@ class VLLMConfig:
     trust_remote_code: bool = True
     dtype: str = "bfloat16"
     max_model_len: Optional[int] = None
+    kv_cache_dtype: Optional[str] = None  # e.g. "float16" to halve KV cache
+    # Metrics configuration
+    enable_metrics: bool = True
+    vllm_version: Optional[str] = None  
 
 
 @dataclass
@@ -30,63 +91,53 @@ class PredictionResult:
     generated_text: str
     
     # Token counts
-    input_tokens: int  # prompt_tokens
-    output_tokens: int  # completion_tokens
+    input_tokens: int  
+    output_tokens: int  
     
-    # Timing metrics (matching AIME evaluation format)
-    ttft: float  # Time to first token (ms)
-    decode_time: float  # Time for decoding after first token (ms)
-    total_time_ms: float  # Total inference time (ms)
-    tokens_per_second: float  # Calculated tokens/sec
+    ttft: float  
+    decode_time: float  
+    total_time_ms: float  
+    tokens_per_second: float  
     
     # Support for multiple sequences from n parameter (for efficient scaling)
     generated_texts: Optional[List[str]] = None
     
     # Raw data for detailed analysis
-    raw_completion: Any = None  # Store VLLM RequestOutput
-    # Expose raw metrics and token ids for specialized instrumentation
+    raw_completion: Any = None  
     prompt_token_ids: List[int] = field(default_factory=list)
     token_ids: List[int] = field(default_factory=list)
     metrics: Any = None
     
-    # Legacy aliases for compatibility
+    # aliases for compatibility
     @property
     def prompt_tokens(self) -> int:
-        """Alias for input_tokens to match AIME format."""
         return self.input_tokens
     
     @property
     def completion_tokens(self) -> int:
-        """Alias for output_tokens to match AIME format."""
         return self.output_tokens
     
     @property
     def tokens_generated(self) -> int:
-        """Alias for output_tokens to match AIME format."""
         return self.output_tokens
     
     @property
     def total_time(self) -> float:
-        """Total time in seconds (for AIME compatibility)."""
         return self.total_time_ms / 1000.0
 
 
 class VLLMModel:
-    """
-    Professional VLLM model wrapper with performance monitoring.
-    
-    Features:
-    - Efficient VLLM integration
-    - Automatic token counting
-    - Performance metrics collection
-    - Standardized result format
-    """
+    """VLLM model wrapper with performance monitoring."""
     
     def __init__(self, config: VLLMConfig):
         """Initialize VLLM model with configuration."""
         self.config = config
         self.model: Optional[LLM] = None
         self.tokenizer: Optional[AutoTokenizer] = None
+        self.vllm_version = _setup_vllm_metrics(
+            enable_metrics=config.enable_metrics,
+            vllm_version=config.vllm_version
+        )
         self._load_model()
         
     def _load_model(self) -> None:
@@ -98,18 +149,38 @@ class VLLMModel:
         )
         
         print(f"Loading VLLM model: {self.config.model_path}")
-        # Configure model for server-class GPUs (same as test_simple_metrics.py)
-        model_kwargs = {
+        base_kwargs = {
             "model": self.config.model_path,
             "tensor_parallel_size": self.config.tensor_parallel_size,
-            "trust_remote_code": self.config.trust_remote_code,
             "gpu_memory_utilization": self.config.gpu_memory_utilization,
-            "dtype": self.config.dtype
         }
-        
         if self.config.max_model_len is not None:
-            model_kwargs["max_model_len"] = self.config.max_model_len
-            
+            base_kwargs["max_model_len"] = self.config.max_model_len
+        if self.config.kv_cache_dtype is not None:
+            base_kwargs["kv_cache_dtype"] = self.config.kv_cache_dtype
+
+        model_kwargs = base_kwargs.copy()
+
+        if self.config.enable_metrics:
+            if self.vllm_version >= "0.9.0":
+                model_kwargs.update(dict(
+                    trust_remote_code=self.config.trust_remote_code,
+                    dtype=self.config.dtype,
+                    disable_log_stats=False,
+                    show_hidden_metrics_for_version="0.9.0",
+                    collect_detailed_traces=["all"],  
+                ))
+            else:
+                model_kwargs.update(dict(
+                    trust_remote_code=self.config.trust_remote_code,
+                    dtype=self.config.dtype,
+                ))
+        else:
+            model_kwargs.update(dict(
+                trust_remote_code=self.config.trust_remote_code,
+                dtype=self.config.dtype,
+            ))
+
         self.model = LLM(**model_kwargs)
         print(f"Model loaded successfully")
         
@@ -137,7 +208,6 @@ class VLLMModel:
         if not self.model or not self.tokenizer:
             raise RuntimeError("Model not loaded. Call _load_model() first.")
             
-        # Configure sampling parameters
         sampling_params = SamplingParams(
             temperature=temperature,
             max_tokens=max_tokens,
@@ -145,7 +215,6 @@ class VLLMModel:
             **kwargs
         )
         
-        # Generate with vLLM (metrics collection enabled in model loading)
         completions = self.model.generate([prompt], sampling_params)
         
         # Validate that we got completions
@@ -169,10 +238,16 @@ class VLLMModel:
         input_tokens = len(completion.prompt_token_ids) if hasattr(completion, 'prompt_token_ids') else 0
         output_tokens = total_output_tokens
         
-        # Extract real metrics from vLLM - handle n > 1 case where some metrics may be None
-        metrics = getattr(completion, "metrics", None)
+        # Extract real metrics from vLLM using version-aware helper
+        engine = getattr(self.model, "llm_engine", None) or getattr(self.model, "engine", None)
+        metrics = _get_metrics_from_completion(completion, engine)
+        
         if metrics is None:
-            raise RuntimeError("No metrics found on completion object")
+            if self.config.enable_metrics:
+                raise RuntimeError(f"No metrics found on completion object (vLLM {self.vllm_version}). "
+                                 f"Ensure metrics are enabled in your configuration.")
+            else:
+                print("⚠️  Metrics disabled in configuration, using zero values")
         
         # Calculate real timing metrics (in seconds) - handle None values for n > 1
         arrival_time = getattr(metrics, 'arrival_time', None) or 0
@@ -180,7 +255,6 @@ class VLLMModel:
         last_token_time = getattr(metrics, 'last_token_time', None) 
         finished_time = getattr(metrics, 'finished_time', None)
         
-        # Calculate timing with None checks (common when n > 1)
         if first_token_time is not None and arrival_time is not None:
             ttft = first_token_time - arrival_time
         else:
@@ -196,10 +270,8 @@ class VLLMModel:
         else:
             total_time = 0
         
-        # Calculate tokens per second
         tokens_per_second = output_tokens / total_time if total_time > 0 else 0
         
-        # Convert to milliseconds for consistency with existing API
         ttft_ms = ttft * 1000
         decode_time_ms = decode_time * 1000
         total_time_ms = total_time * 1000
@@ -207,7 +279,7 @@ class VLLMModel:
         return PredictionResult(
             predicted_choice="", 
             generated_text=generated_text,
-            generated_texts=generated_texts,  # Support multiple sequences from n parameter
+            generated_texts=generated_texts,  
             input_tokens=input_tokens,
             output_tokens=output_tokens,
             ttft=ttft_ms,
@@ -244,11 +316,9 @@ class VLLMModel:
         if not self.model or not self.tokenizer:
             raise RuntimeError("Model not loaded. Call _load_model() first.")
             
-        # For single prompt, use individual predict for consistency
         if len(prompts) == 1:
             return [self.predict(prompts[0], max_tokens, temperature, top_p, **kwargs)]
         
-        # Configure sampling parameters
         sampling_params = SamplingParams(
             temperature=temperature,
             max_tokens=max_tokens,
@@ -256,18 +326,23 @@ class VLLMModel:
             **kwargs
         )
         
-        # Generate batch with real metrics collection
         completions = self.model.generate(prompts, sampling_params)
         
-        # Process results with standard vLLM metrics (like test_simple_metrics.py)
         results = []
+        engine = getattr(self.model, "llm_engine", None) or getattr(self.model, "engine", None)
+        
         for completion in completions:
-            # Extract metrics using getattr approach
-            metrics = getattr(completion, "metrics", None)
+            metrics = _get_metrics_from_completion(completion, engine)
             if metrics is None:
-                raise RuntimeError("No metrics found on completion object")
+                if self.config.enable_metrics:
+                    raise RuntimeError(f"No metrics found on completion object (vLLM {self.vllm_version})")
+                else:
+                    # Create dummy metrics for disabled case
+                    metrics = type('DummyMetrics', (), {
+                        'arrival_time': 0, 'first_token_time': 0, 
+                        'last_token_time': 0, 'finished_time': 0
+                    })()
             
-            # Extract generated text and tokens
             generated_text = completion.outputs[0].text
             output_token_ids = completion.outputs[0].token_ids
             
@@ -276,20 +351,17 @@ class VLLMModel:
             decode_time = metrics.last_token_time - metrics.first_token_time
             total_time = metrics.finished_time - metrics.arrival_time
             
-            # Token counts using available attributes
             input_tokens = len(completion.prompt_token_ids) if hasattr(completion, 'prompt_token_ids') else 0
             output_tokens = len(output_token_ids)
             
-            # Calculate tokens per second
             tokens_per_second = output_tokens / total_time if total_time > 0 else 0
             
-            # Convert to milliseconds
             ttft_ms = ttft * 1000
             decode_time_ms = decode_time * 1000
             total_time_ms = total_time * 1000
             
             results.append(PredictionResult(
-                predicted_choice="",  # Will be extracted by evaluator
+                predicted_choice="",  
                 generated_text=generated_text,
                 input_tokens=input_tokens,
                 output_tokens=output_tokens,
@@ -311,5 +383,7 @@ class VLLMModel:
             "model_path": self.config.model_path,
             "tensor_parallel_size": self.config.tensor_parallel_size,
             "gpu_memory_utilization": self.config.gpu_memory_utilization,
-            "dtype": self.config.dtype
+            "dtype": self.config.dtype,
+            "vllm_version": self.vllm_version,
+            "metrics_enabled": self.config.enable_metrics
         }

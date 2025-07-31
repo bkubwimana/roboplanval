@@ -8,7 +8,10 @@ model:
   top_p: 0.9
   stop_sequences: ["<|im_end|>", "<|endoftext|>", "</s>"]
   tensor_parallel_size: 1
-  gpu_memory_utilization: 0.9
+  gpu_memory_utilization: 0.75
+  # Metrics configuration for vLLM
+  enable_metrics: true
+  vllm_version: "0.9.1"
 
 evaluation:
   num_questions: null   

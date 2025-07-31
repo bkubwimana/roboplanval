@@ -2,13 +2,16 @@ name: "np_meeting"
 description: "Natural-Plan Meeting-Planning evaluation"
 
 model:
-  max_tokens: 4096
-  max_model_len: 5000
+  max_tokens: 3072
+  max_model_len: 3840
   temperature: 0.0
   top_p: 0.9
   stop_sequences: ["<|im_end|>", "<|endoftext|>", "</s>"]
   tensor_parallel_size: 1
-  gpu_memory_utilization: 0.9
+  gpu_memory_utilization: 0.65
+  # Metrics configuration for vLLM
+  enable_metrics: true
+  vllm_version: "0.9.1"  
 
 evaluation:
   num_questions: null
