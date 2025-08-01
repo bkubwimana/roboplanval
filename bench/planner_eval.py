@@ -19,13 +19,14 @@ from __future__ import annotations
 
 import argparse
 import os, sys, subprocess
-from datetime import datetime
 
 # Append bench/src to PYTHONPATH
 sys.path.append(os.path.join(os.path.dirname(__file__), 'src'))
 
-from src.evaluators.natural_plan_evaluator import NaturalPlanEvaluator
-from src.evaluators.natural_plan_scaling_evaluator import NaturalPlanScalingEvaluator
+from src.evaluators.plan_evaluator_base import PlanEvaluatorBase
+from src.evaluators.plan_evaluator_scaling import PlanEvaluatorScaling
+from src.evaluators.plan_evaluator_direct import PlanEvaluatorDirect
+from src.evaluators.plan_evaluator_budget import PlanEvaluatorBudget
 import yaml
 
 TASKS = ["trip", "meeting", "calendar"]
@@ -35,7 +36,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--task", choices=TASKS + ["all"], default="trip",
                    help="Which task to run (trip / meeting / calendar / all)")
     p.add_argument("--model", required=True, help="Model path or HF repo id")
-    p.add_argument("--gpus", help="Comma-separated CUDA device IDs to use (e.g. '0,1,2'). For --task all this list is assigned round-robin to trip,meeting,calendar.")
+    p.add_argument("--gpus", help="Comma-separated CUDA device IDs to use (e.g. '0,1,2')")
     p.add_argument("--gpu", help="Single GPU id for this subprocess (internal)")
     p.add_argument("--config", help="Path to YAML config (single-task only)")
     p.add_argument("--base-config-dir", default="bench/configs",
@@ -54,18 +55,28 @@ def run_task(task: str, model_path: str, config_path: str, output_root: str, gpu
     with open(config_path, 'r') as f:
         config = yaml.safe_load(f)
     
-    # Use scaling evaluator if scaling config exists with num_samples > 1
-    if 'scaling' in config and config['scaling'].get('num_samples', 1) > 1:
-        print(f"[planner_eval] Using NaturalPlanScalingEvaluator for {config['scaling']['num_samples']} samples")
-        evaluator = NaturalPlanScalingEvaluator(config_path, task)
-    else:
-        print(f"[planner_eval] Using NaturalPlanEvaluator (single sample)")
-        evaluator = NaturalPlanEvaluator(config_path, task)
+    # Check config type based on exact name
+    config_name = config.get('name', '').lower()
+    is_direct_config = config_name == 'plan_direct'
+    is_budget_config = config_name == 'np_budget'
+    is_scaling_config = config_name == 'np_scaling'
     
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    task_out_dir = os.path.join(output_root, f"{task}_{timestamp}")
-    os.makedirs(task_out_dir, exist_ok=True)
-    result = evaluator.evaluate_task(model_path=model_path, output_dir=task_out_dir)
+    # Select evaluator based on config name
+    if is_scaling_config:
+        print(f"[planner_eval] Using PlanEvaluatorScaling")
+        evaluator = PlanEvaluatorScaling(config_path, task)
+    elif is_direct_config:
+        print(f"[planner_eval] Using PlanEvaluatorDirect (direct mode)")
+        evaluator = PlanEvaluatorDirect(config_path, task)
+    elif is_budget_config:
+        print(f"[planner_eval] Using PlanEvaluatorBudget (no-reasoning mode)")
+        evaluator = PlanEvaluatorBudget(config_path, task)
+    else:
+        print(f"[planner_eval] Using PlanEvaluatorBase (default)")
+        evaluator = PlanEvaluatorBase(config_path, task)
+    
+    os.makedirs(output_root, exist_ok=True)
+    result = evaluator.evaluate_task(model_path=model_path, output_dir=output_root)
     evaluator.print_summary(result)
 
 

@@ -50,7 +50,7 @@ def get_meeting_funcs():
     return process_constraints, validator_from_text, parse_text_plan
 
 
-class NaturalPlanEvaluator(BaseEvaluator):
+class PlanEvaluatorBudget(BaseEvaluator):
     """Evaluate a local or remote model on one of the Natural-Plan tasks."""
 
     def __init__(self, config_path: str, task: str):
@@ -69,9 +69,10 @@ class NaturalPlanEvaluator(BaseEvaluator):
     # ------------------------------------------------------------------
     def format_prompt(self, example: NPExample) -> str:  # type: ignore[override]
         """Return the few-shot prompt contained in each example."""
-        # Check if config has custom prompting templates (for budget mode)
+        assistant_prefixes = getattr(self.config, 'prompting', {}).get('assistant_prefixes', {})
+        assistant_prefix = assistant_prefixes.get(self.task, 'SOLUTION:')
+        
         if hasattr(self.config, 'prompting') and 'user_template' in self.config.prompting:
-            # Use budget-aware templating
             system_prompt = self.config.prompting.get('system_prompt', '')
             user_template = self.config.prompting.get('user_template', '{prompt}')
             
@@ -79,12 +80,19 @@ class NaturalPlanEvaluator(BaseEvaluator):
             system_prompt = system_prompt.format(max_tokens=max_tokens)
             user_template = user_template.format(max_tokens=max_tokens, prompt=example.prompt)
             
+            messages = []
             if system_prompt:
-                return f"{system_prompt}\n\n{user_template}"
-            else:
-                return user_template
-        else:
-            return example.prompt
+                messages.append({"role": "system", "content": system_prompt})
+            messages.append({"role": "user", "content": user_template})
+
+            formatted = self.model.tokenizer.apply_chat_template(
+                messages, tokenize=False, add_generation_prompt=False
+            )
+            
+            formatted += f"<think> Okay I have finished thinking.</think>\n\n{assistant_prefix}"
+            return formatted
+        else: 
+            return example.prompt + f"\n\nAssistant: <think> Okay I have finished thinking.</think>\n\n{assistant_prefix}"
 
     # ------------------------------------------------------------------
     # Public API
@@ -196,7 +204,7 @@ class NaturalPlanEvaluator(BaseEvaluator):
                         "tokens_per_second": prediction.tokens_per_second,
                     }
                     question_results.append(question_result)
-                    write_csv_row(actual_question_idx, ex, prediction, None, None, is_correct)
+                    write_csv_row(actual_question_idx, ex, prediction, None, None, is_correct, formatted_prompt=prompt)
                     monitor.record_question_result(actual_question_idx, prediction)
                     
                     # Save partial results every 10 questions

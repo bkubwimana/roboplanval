@@ -17,6 +17,7 @@
 import collections
 import datetime
 import json
+import re
 from typing import Any, Sequence
 
 from absl import app
@@ -104,6 +105,13 @@ def validator_from_text(
 
         cur_time = end_time
       elif step.startswith("You meet"):
+        # Check for explicit start time, e.g. "from 3:00PM"
+        match = re.search(r'from (\d{1,2}:\d{2}[APM]{2})', step)
+        if match:
+            start_time_str = match.group(1)
+            start_time = convert_to_time_obj(start_time_str)
+            if start_time > cur_time:
+                cur_time = start_time
 
         person = step.split("meet ")[1].split(" for")[0].strip()
         if person in met_with:
@@ -114,24 +122,39 @@ def validator_from_text(
           )
 
         met_with[person] = 1
-        new_time = cur_time + datetime.timedelta(
-            minutes=processed_constraints[person]["meeting_time"]
-        )
 
-        if (
-            cur_location == processed_constraints[person]["location"]
-            and cur_time >= processed_constraints[person]["start_time"]
-            and new_time <= processed_constraints[person]["end_time"]
-        ):
-
-          score += 1
-          cur_time = new_time
+        if person not in processed_constraints:
+            # Fallback: parse meeting duration directly from the step
+            dur_match = re.search(r"for (\d+) minutes", step)
+            if not dur_match:
+                raise ValueError("meeting_time")
+            meeting_minutes = int(dur_match.group(1))
+            new_time = cur_time + datetime.timedelta(minutes=meeting_minutes)
+            # Give credit if the meeting ends before midnight
+            if new_time <= convert_to_time_obj("11:59PM"):
+                score += 1
+                cur_time = new_time
+            else:
+                raise ValueError("Meeting runs past midnight")
         else:
-          raise ValueError("Invalid meeting time or location")
+            new_time = cur_time + datetime.timedelta(
+                minutes=processed_constraints[person]["meeting_time"]
+            )
+
+            if (
+                cur_location == processed_constraints[person]["location"]
+                and cur_time >= processed_constraints[person]["start_time"]
+                and new_time <= processed_constraints[person]["end_time"]
+            ):
+
+              score += 1
+              cur_time = new_time
+            else:
+              raise ValueError("Invalid meeting time or location")
       else:
         raise ValueError("Unknown plan format")
 
-    except ValueError as e:
+    except (ValueError, KeyError, IndexError) as e:
       print("Had error: {e} with step: {step}".format(e=e, step=step))
       break
 

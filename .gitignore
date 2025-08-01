@@ -59,3 +59,7 @@ env/
 *.swo
 # End of Selection
 bypass.sh
+combined_results
+*.csv
+eval_datasets/
+processor/static_eval_results/

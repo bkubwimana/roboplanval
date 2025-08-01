@@ -93,13 +93,15 @@ def evaluation_csv_writer(output_dir: str, run_name: str, subject: str):
     
     with StreamingCSVWriter(csv_file_path, fieldnames) as writer:
         def write_evaluation_row(question_id: int, question_data: Any, prediction: Any, 
-                                correct_answer: str, predicted_choice: str, is_correct: bool):
+                                correct_answer: str, predicted_choice: str, is_correct: bool, formatted_prompt: str = None):
             """Write a standardized evaluation row."""
+            question_text = formatted_prompt if formatted_prompt is not None else getattr(question_data, 'question', getattr(question_data, 'prompt', ''))
+            
             writer.write_row({
                 'question_id': question_id,
                 'subject': subject,
-                'question': question_data.question,
-                'choices': str(question_data.choices),
+                'question': question_text,
+                'choices': str(getattr(question_data, 'choices', '')),
                 'correct_answer': correct_answer,
                 'predicted_choice': predicted_choice,
                 'is_correct': is_correct,

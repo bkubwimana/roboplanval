@@ -1,29 +1,29 @@
 #!/usr/bin/env bash
 # -----------------------------------------------------------------------------
-# np_budget.sh – launch Natural-Plan *budget-limited* evaluation jobs in detached
-#                 GNU screen sessions (one per task).
+# plan_direct.sh – launch Natural-Plan *direct* evaluation jobs in detached
+#                   GNU screen sessions (one per task).
 #
 # Usage examples
 # -----------------------------------------------------------------------------
-#   ./np_budget.sh                 # run meeting + calendar in budget mode (14 B)
-#   ./np_budget.sh meeting         # run only meeting task  (14 B)
-#   ./np_budget.sh meeting 8b      # run meeting task with 8 B model
-#   ./np_budget.sh all 1.5b        # run all tasks    with 1 .5 B model
+#   ./plan_direct.sh                 # run meeting + calendar in direct mode (14 B)
+#   ./plan_direct.sh meeting         # run only meeting task  (14 B)
+#   ./plan_direct.sh meeting 8b      # run meeting task with 8 B model
+#   ./plan_direct.sh all 1.5b        # run all tasks    with 1 .5 B model
 #
 # Notes
 # -----
 # • Each task launches in its own detached screen session so you can
 #   re-attach (`screen -r <session>`) and tail the logs live.
 # • GPU allocation is static (see GPU_MAP below) but easy to tweak.
-# • The script always uses bench/configs/np_budget.yaml and therefore injects the
-#   token-budget prompts automatically via planner_eval.py → NaturalPlanEvaluator.
+# • The script always uses bench/configs/plan_direct.yaml and therefore uses the
+#   DirectNaturalPlanEvaluator with no-reasoning trick via planner_eval.py.
 # -----------------------------------------------------------------------------
 
 set -euo pipefail
 
 BASE_CONFIG_DIR="bench/configs"
-BUDGET_CONFIG="${BASE_CONFIG_DIR}/np_budget.yaml"
-OUTPUT_DIR_BASE="${OUTPUT_DIR_BASE:-./results/budget}"
+DIRECT_CONFIG="${BASE_CONFIG_DIR}/plan_direct.yaml"
+OUTPUT_DIR_BASE="${OUTPUT_DIR_BASE:-./results/direct}"
 
 # Python environment to activate (same as bypass.sh)
 VENV_ACT="/home/lab/modfi/SkyThought/venvsky/bin/activate"
@@ -35,11 +35,11 @@ MODEL_SIZE=${2:-14b}  # 14b | 8b | 1.5b
 # 2️⃣ Map model-size shortcut → full HF repo ----------------------------------
 case "${MODEL_SIZE,,}" in
   14b)
-    MODEL="deepseek-ai/DeepSeek-R1-Distill-Qwen-14B" ; MODEL_SHORT="14b" ;;
+    MODEL="Qwen/Qwen2.5-14B-Instruct" ; MODEL_SHORT="14b" ;;
   8b)
-    MODEL="deepseek-ai/DeepSeek-R1-Distill-Llama-8B" ; MODEL_SHORT="8b" ;;
+    MODEL="meta-llama/Llama-3.1-8B-Instruct" ; MODEL_SHORT="8b" ;;
   1.5b|1_5b|1.5)
-    MODEL="deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B" ; MODEL_SHORT="1.5b" ;;
+    MODEL="Qwen/Qwen2.5-1.5B-Instruct" ; MODEL_SHORT="1.5b" ;;
   *)
     echo "❌ Unsupported MODEL_SIZE '${MODEL_SIZE}'. Use: 14b | 8b | 1.5b" >&2 ; exit 1 ;;
 esac
@@ -52,7 +52,7 @@ OUTPUT_DIR="${OUTPUT_DIR_BASE}/${MODEL_SHORT}"
 declare -A GPU_MAP
 GPU_MAP["14b,trip"]=0     ; GPU_MAP["14b,meeting"]=1     ; GPU_MAP["14b,calendar"]=2
 GPU_MAP["8b,trip"]=3     ; GPU_MAP["8b,meeting"]=4     ; GPU_MAP["8b,calendar"]=5
-GPU_MAP["1.5b,trip"]=6   ; GPU_MAP["1.5b,meeting"]=7   ; GPU_MAP["1.5b,calendar"]=8
+GPU_MAP["1.5b,trip"]=6   ; GPU_MAP["1.5b,meeting"]=7   ; GPU_MAP["1.5b,calendar"]=7
 
 MEETING_GPU=${GPU_MAP["${MODEL_SHORT},meeting"]}
 CALENDAR_GPU=${GPU_MAP["${MODEL_SHORT},calendar"]}
@@ -81,7 +81,7 @@ check_gpu() {
 # 6️⃣ Launch helper -----------------------------------------------------------
 launch_task() {
   local task=$1; local gpu=$2; local session=$3; local log=$4
-  local cfg="$BUDGET_CONFIG"
+  local cfg="$DIRECT_CONFIG"
 
   check_gpu "$gpu" "$task" || return
 
@@ -118,18 +118,18 @@ python -u bench/planner_eval.py \
 mkdir -p "$OUTPUT_DIR"
 
 if $RUN_MEETING; then
-  launch_task meeting "$MEETING_GPU" "np_budget_meeting_${MODEL_SHORT}" "np_budget_meeting_${MODEL_SHORT}.log"
+  launch_task meeting "$MEETING_GPU" "plan_direct_meeting_${MODEL_SHORT}" "plan_direct_meeting_${MODEL_SHORT}.log"
 fi
 if $RUN_CALENDAR; then
-  launch_task calendar "$CALENDAR_GPU" "np_budget_calendar_${MODEL_SHORT}" "np_budget_calendar_${MODEL_SHORT}.log"
+  launch_task calendar "$CALENDAR_GPU" "plan_direct_calendar_${MODEL_SHORT}" "plan_direct_calendar_${MODEL_SHORT}.log"
 fi
 if $RUN_TRIP; then
-  launch_task trip "$TRIP_GPU" "np_budget_trip_${MODEL_SHORT}" "np_budget_trip_${MODEL_SHORT}.log"
+  launch_task trip "$TRIP_GPU" "plan_direct_trip_${MODEL_SHORT}" "plan_direct_trip_${MODEL_SHORT}.log"
 fi
 
 # 8️⃣ Summary -----------------------------------------------------------------
-echo "\n=== np_budget summary ==="
+echo "\n=== plan_direct summary ==="
 echo "Model: $MODEL (${MODEL_SHORT})"
-$RUN_MEETING   && echo "Meeting  → GPU $MEETING_GPU  screen np_budget_meeting_${MODEL_SHORT}"
-$RUN_CALENDAR  && echo "Calendar → GPU $CALENDAR_GPU screen np_budget_calendar_${MODEL_SHORT}"
-$RUN_TRIP      && echo "Trip     → GPU $TRIP_GPU     screen np_budget_trip_${MODEL_SHORT}"
+$RUN_MEETING   && echo "Meeting  → GPU $MEETING_GPU  screen plan_direct_meeting_${MODEL_SHORT}"
+$RUN_CALENDAR  && echo "Calendar → GPU $CALENDAR_GPU screen plan_direct_calendar_${MODEL_SHORT}"
+$RUN_TRIP      && echo "Trip     → GPU $TRIP_GPU     screen plan_direct_trip_${MODEL_SHORT}"

@@ -12,7 +12,7 @@ import json
 import argparse
 from datetime import datetime
 
-sys.path.append(os.path.join(os.path.dirname(__file__), 'src'))
+sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'src'))
 
 from src.evaluators.scale_evaluator import ScaleEvaluator
 from src.data_loaders.mmlu_loader import MMLULoader

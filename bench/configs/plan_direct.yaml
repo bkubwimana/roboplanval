@@ -1,5 +1,5 @@
-name: "np_budget"
-description: "Budget-limited Natural-Plan evaluation for edge deployment"
+name: "plan_direct"
+description: "Direct Natural-Plan evaluation for edge deployment"
 
 model:
   max_tokens: 512           
@@ -19,11 +19,7 @@ evaluation:
 
 prompting:
   system_prompt: "You must limit your answer to exactly {max_tokens} tokens or fewer."
-  user_template: "Stay within {max_tokens} tokens total.\n\n{prompt}"
-  assistant_prefixes:
-    meeting: "SOLUTION:"
-    calendar: "Here is the proposed time:"
-    trip: "Here is the trip plan for visiting"
+  user_template: "{prompt}"
 
 output:
   save_detailed_responses: true

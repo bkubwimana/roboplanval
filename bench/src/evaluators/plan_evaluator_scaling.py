@@ -13,11 +13,11 @@ from typing import Dict, Any, List, Tuple
 from datetime import datetime
 from collections import Counter
 
-from .natural_plan_evaluator import NaturalPlanEvaluator
+from .plan_evaluator_base import PlanEvaluatorBase
 from .base_evaluator import EvaluationResult
 
 
-class NaturalPlanScalingEvaluator(NaturalPlanEvaluator):
+class PlanEvaluatorScaling(PlanEvaluatorBase):
     """
     Natural Plan scaling evaluator for test-time scaling with multiple samples.
     
@@ -202,7 +202,7 @@ class NaturalPlanScalingEvaluator(NaturalPlanEvaluator):
                         "avg_time_per_sample": prediction.scaling_details['avg_time_per_sample']
                     }
                     question_results.append(question_result)
-                    write_csv_row(actual_question_idx, ex, prediction, None, None, is_correct)
+                    write_csv_row(actual_question_idx, ex, prediction, None, None, is_correct, formatted_prompt=prompt)
                     monitor.record_question_result(actual_question_idx, prediction)
                     
                     # Save partial results every 10 questions
